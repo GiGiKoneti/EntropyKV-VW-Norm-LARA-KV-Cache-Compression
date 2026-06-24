@@ -1,59 +1,93 @@
-# EntropyKV: Attention-Free Key-Vector Entropy Eviction
+# EntropyKV: Value-Weighted KV Cache Compression with Layer-Adaptive Recency Allocation
 
-This repository implements and evaluates **EntropyKV**, an attention-free KV cache eviction strategy that leverages the structural properties of key vectors (such as L2 norm, variance, and Shannon entropy) across the head dimension to predict token importance.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![PyTorch 2.0+](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
 
-Unlike traditional eviction policies (such as H2O or SnapKV) which require materializing and reading attention matrices—creating a system-algorithm mismatch with fused attention kernels like FlashAttention or PagedAttention—**EntropyKV is 100% attention-free**, enabling direct compatibility with high-performance, fused inference engines.
+**EntropyKV** is an online, **100% attention-free** key-value (KV) cache compression framework. Traditional KV cache eviction methods (e.g., H2O, SnapKV) require materializing and reading full attention matrices to determine token importance. This requirement creates an architectural mismatch with high-performance fused kernels like **FlashAttention** or **PagedAttention**, resulting in high memory overhead, slowdowns, and Out-of-Memory (OOM) errors during long-context prefilling.
 
----
-
-## 📂 Repository Structure
-
-- **`src/`**: Core library code.
-  - [`src/cache/entropy_cache.py`](file:///Users/mynimbus/Attention-Free-Key-Vector-Entropy-Eviction/src/cache/entropy_cache.py): The main `EntropyCache` implementation extending Hugging Face's `DynamicCache`.
-  - [`src/baselines/`](file:///Users/mynimbus/Attention-Free-Key-Vector-Entropy-Eviction/src/baselines): Re-implementations of comparative KV cache eviction baselines:
-    - `streaming.py` (StreamingLLM)
-    - `h2o.py` (Heavy Hitter Oracle)
-    - `snapkv.py` (SnapKV)
-    - `random_eviction.py` (Random Eviction baseline)
-  - [`src/eval/`](file:///Users/mynimbus/Attention-Free-Key-Vector-Entropy-Eviction/src/eval): Evaluation modules:
-    - `perplexity.py`: Sliding-window WikiText-2 perplexity evaluation (supporting token-by-token autoregressive decoding mode and chunk/prefill mode).
-    - `longbench.py`: Downstream long-context QA harness.
-    - `niah.py`: Needle-in-a-Haystack (NIAH) retrieval test.
-- **`analysis/`**: Hypotheses testing and Phase 0 correlation validation.
-  - [`analysis/instrument_forward_pass.py`](file:///Users/mynimbus/Attention-Free-Key-Vector-Entropy-Eviction/analysis/instrument_forward_pass.py): Extracts raw key-states and GQA attention distributions.
-  - [`analysis/correlation_analysis.py`](file:///Users/mynimbus/Attention-Free-Key-Vector-Entropy-Eviction/analysis/correlation_analysis.py): Performs statistical analysis (Spearman Rank Correlation) and generates plots.
-- **`experiments/`**: Execution wrappers for sweep automation.
-  - [`experiments/run_full_sweep.py`](file:///Users/mynimbus/Attention-Free-Key-Vector-Entropy-Eviction/experiments/run_full_sweep.py): Runs WikiText-2 PPL sweeps and downstream QA sweeps.
-  - [`experiments/run_downstream.py`](file:///Users/mynimbus/Attention-Free-Key-Vector-Entropy-Eviction/experiments/run_downstream.py): Runs QA and NIAH sweeps.
-- **`configs/`**: JSON configuration parameters for baseline and proposed methods.
-- **`paper/`**: LaTeX draft template (`main.tex`) for academic publication.
+In contrast, **EntropyKV** operates directly on the key and value states, completely bypassing the need to materialize attention weights. By leveraging key-vector entropy, variance, and value-vector norms, it determines token significance on-the-fly, achieving extreme compression with minimal quality degradation.
 
 ---
 
-## 💻 Windows + CUDA Setup & Installation
+## 🚀 Key Highlights & Contributions
 
-Follow these steps to set up this repository on your Windows laptop with NVIDIA GPU support:
+* 🌟 **100% Attention-Free Eviction**: Zero dependency on attention matrices. Fully compatible with native PyTorch SDPA, FlashAttention, and hardware-fused attention engines.
+* 🧠 **Value-Weighted Key Norm (VW-Norm)**: Combines key-vector variance (entropy proxies) with value-vector magnitudes, selectively protecting highly active "outlier" and high-entropy states.
+* 📈 **Layer-Adaptive Recency Allocation (LARA)**: Uses a U-shaped allocation function across network depth, reserving larger recency windows for attention-sink layers (bottom) and semantic consolidation layers (top).
+* ⚙️ **Hardware-Safe Chunked Prefill**: Implements memory-safe context processing, allowing 32k context lengths on consumer GPUs (e.g., NVIDIA RTX 5060 Laptop 8GB) without OOM.
+
+---
+
+## 📊 Summary of Downstream Results
+
+### 1. TinyLlama-1.1B-Chat (2k Context Limit)
+* **Downstream QA F1 Score**: At 50% KV cache budget, our method preserves **0.1052 F1** (outperforming StreamingLLM by **3.9×**, and doubling both H2O and L2-Norm). At budget 0.7, it retains **92%** of the full cache baseline.
+* **Needle-in-a-Haystack (NIAH)**: Achieves **37.5% average retrieval accuracy** at budget 0.5, uniquely preserving early-context recall where standard recency methods (StreamingLLM) suffer 0% retrieval.
+
+### 2. Qwen2-1.5B-Instruct (32k Context Limit)
+* **Downstream QA F1 Score**: At budget 0.5, our method retains **0.1333 F1** — **6×** StreamingLLM, **1.4×** H2O, and **2.6×** L2-Norm.
+* **Efficiency & Scalability**: Cuts peak VRAM by **43%** (saving 5.0 GB) and delivers **32× decoding speedup** under tight budgets, while H2O and SnapKV suffer from Out-of-Memory (OOM) failures due to prefill activation spikes.
+
+---
+
+## 📁 Repository Structure
+
+```
+.
+├── src/
+│   ├── cache/
+│   │   ├── entropy_cache.py       # Main EntropyKV cache implementation (VW-Norm, LARA)
+│   │   └── utils.py               # Value-weighted norm computation routines
+│   ├── baselines/
+│   │   ├── streaming.py           # StreamingLLM baseline
+│   │   ├── h2o.py                 # Heavy Hitter Oracle (H2O) baseline
+│   │   ├── snapkv.py              # SnapKV prefill baseline
+│   │   └── random_eviction.py     # Uniform random eviction baseline
+│   └── eval/
+│       ├── perplexity.py          # WikiText-2 sliding-window perplexity harness
+│       ├── longbench.py           # LongBench downstream QA benchmark
+│       └── niah.py                # Needle-in-a-Haystack (NIAH) context evaluation
+│
+├── experiments/
+│   ├── run_full_sweep.py          # Master sweep pipeline (PPL + QA + NIAH)
+│   ├── run_downstream.py          # Dedicated downstream QA and PPL sweeps
+│   └── profile_efficiency.py      # VRAM and throughput profiling script
+│
+├── analysis/
+│   ├── correlation_analysis.py    # Per-layer Spearman rank correlation analysis
+│   └── instrument_forward_pass.py # Key-state and attention distribution extraction
+│
+├── ThingsForPaper/                # ★ Collection of all paper drafts, LaTeX source,
+│                                  #   figures, and raw results (see section below)
+├── configs/                       # Hyperparameter configuration JSONs
+└── paper/                         # Original LaTeX draft templates
+```
+
+---
+
+## 📦 Windows + CUDA Setup & Installation
 
 ### 1. Prerequisites
-- **Python 3.10+**: Ensure Python is added to your system `PATH`.
-- **Git**: Installed and configured to pull/push from GitHub.
-- **CUDA Toolkit**: Match the PyTorch CUDA installation (typically CUDA 12.1 or 12.4).
+* **Python 3.10+** (Ensure it is in your system `PATH`).
+* **Git** (For cloning and pushing).
+* **NVIDIA CUDA Toolkit** (Compatible with PyTorch, e.g., CUDA 12.1 or 12.4).
 
-### 2. Virtual Environment Setup
-Open PowerShell or Command Prompt in the repository folder:
+### 2. Set Up Virtual Environment
+Open PowerShell or Command Prompt in the repository root:
 ```powershell
-# Create virtual environment
+# Create the virtual environment
 python -m venv venv
 
-# Activate virtual environment
-# In PowerShell:
+# Activate the virtual environment (PowerShell)
 .\venv\Scripts\Activate.ps1
-# In CMD:
+
+# Activate the virtual environment (CMD)
 .\venv\Scripts\activate.bat
 ```
 
 ### 3. Install PyTorch with CUDA Support
-To leverage your GPU, install the CUDA-enabled version of PyTorch first:
+Ensure PyTorch is installed with GPU acceleration:
 ```bash
 # For CUDA 12.1:
 pip install torch --index-url https://download.pytorch.org/whl/cu121
@@ -62,49 +96,46 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
 
-### 4. Install Remaining Dependencies
+### 4. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 5. Verify GPU/CUDA Activation
-Verify that PyTorch can successfully communicate with your GPU:
+### 5. Verify CUDA Support
 ```bash
-python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
+python -c "import torch; print('CUDA active:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
 ```
 
 ---
 
-## 📈 Running Evaluations & Sweeps
+## 📈 Running Sweeps & Profiling
 
-All experiment execution scripts have been made fully cross-platform (using `sys.executable` internally instead of hardcoded `python3` paths) to run seamlessly on both Unix-like and Windows shells.
-
-### 🧪 Quick Verification Run
-To verify the entire environment and execution pipelines on a subset of data (fast CPU/GPU-friendly sanity check):
+### 🧪 Sanity Check / Quick Sweep
+Verify the installation and pipeline using a subset of data (fast CPU/GPU check):
 ```bash
 python experiments/run_full_sweep.py --quick
 ```
-This runs a micro-sweep of perplexity (using 512 evaluation tokens) and downstream tasks (2 samples) across a subset of budget ratios, producing verification plots in `analysis/figures/`.
 
 ### 🔬 Full Benchmark Suite
-To run the full evaluation suite as described in our research draft:
+Execute the entire evaluation suite (PPL, QA, NIAH) across multiple budget ratios:
 ```bash
 python experiments/run_full_sweep.py
 ```
-This performs a thorough sliding-window WikiText-2 perplexity sweep, downstream long-context QA benchmark, and Needle-in-a-Haystack (NIAH) retrieval maps across all budgets and baseline algorithms, saving results and figures under:
-- `analysis/extracted_data/` (JSON and compressed `.npz` arrays)
-- `analysis/figures/` (Matplotlib/Seaborn Heatmaps and Line Plots)
+
+### ⚡ VRAM & Throughput Profiling
+To measure peak VRAM and generation speed at 32k context length:
+```bash
+python experiments/profile_efficiency.py
+```
 
 ---
 
-## 📊 Phase 0: Hypothesis Validation (Optional Re-Run)
-If you wish to re-extract key states and re-run the correlation analysis:
-1. **Instrument Forward Pass**:
-   ```bash
-   python analysis/instrument_forward_pass.py
-   ```
-2. **Compute Statistics & Heatmaps**:
-   ```bash
-   python analysis/correlation_analysis.py
-   ```
-This will regenerate the Spearman correlation Heatmaps mapping layer-wise attention-sink preferences, demonstrating the negative correlation ($r \approx -0.72$) between key-vector L2 norms and future attention accumulation.
+## 📝 Writing the Paper? Go to `ThingsForPaper/`!
+
+For end-to-end academic paper drafting, we compiled all resources into the **`ThingsForPaper/`** folder:
+* 📊 **`01_Figures/`**: 32 publication-ready plots (PPL curves, QA histograms, 13 NIAH heatmaps).
+* 🔢 **`02_Raw_Data/`**: Raw JSON and NPZ files for plotting or statistical validation.
+* ✍️ **`06_Research_Notes/`**: Contains a fully drafted paper draft (`paper_draft.md`), a pre-written LaTeX caption document (`figure_captions.md`), and a quick-reference cheat sheet (`cheat_sheet.md`) with all key numbers.
+* 📄 **`07_Paper_LaTeX/`**: Complete `main.tex` and bibliography `references.bib` ready for compilation.
+
+Refer to [ThingsForPaper/README.md](file:///c:/Users/gigik/OneDrive/Desktop/Attention-Free-Key-Vector-Entropy-Eviction/ThingsForPaper/README.md) for more details.
