@@ -1,0 +1,7 @@
+{
+    "method": "full",
+    "budget_ratio": 1.0,
+    "sink_size": 4,
+    "recency_size": 32,
+    "metric": null
+}
