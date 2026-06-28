@@ -218,8 +218,20 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Project specific ignores
-analysis/extracted_data/sample_*.npz
+analysis/extracted_data/
+analysis/figures/
 *.pdf
 
-ThingsForPaper/02_Raw_Data/Attention_Samples/sample_*.npz
-ThingsForPaper/08_Experiment_Logs/transcript.jsonl
+# Preprint and Paper templates
+ThingsForPaper/
+paper/
+arxiv_submission/
+arxiv_submission.zip
+Style_and_Template_for_Preprints__arXiv__bio_arXiv_/
+
+# Drafts and research notes
+EntropyKV_Implementation_Plan.md
+Layer Adaptive KV Cache Research.md
+kv_cache_eval_report.md
+proof_of_hypothesis.md
+
